@@ -5,9 +5,12 @@ import pandas as pd
 import random
 import itertools
 import os
+import sys
 from sklearn.metrics import roc_auc_score
 import time
 from tqdm import tqdm
+import multiprocessing as mp
+import gc
 
 from tests.mocks.utils.dataset import (
     generate_map_recommend_mockdata,
@@ -46,7 +49,7 @@ def mock_unbias_evaluation(
         n_users=2000,
         n_items=param['n_pops'] * 5,
         unbias=True,
-        param={
+        params={
             'beta_user': beta_user,
             'beta_item': beta_item,
             'intercept': intercept,
@@ -67,12 +70,17 @@ def mock_unbias_evaluation(
     # labels: Dict[int, List[int]] - user_id to list of item_id
     labels = {}
     for i, row in enumerate(dataset.clicks):
-        labels[i] = np.where(row == 1)[0].tolist()
+        user_items = np.where(row == 1)[0].tolist()
+        # avoid empty labels
+        if len(user_items) > 0:
+            labels[i] = user_items
+
     # construct rec_items
     metrics = {}
 
     for topk in [10, 20, 50]:
-        rec_items = tf.math.top_k(score, k=topk).indices.numpy()
+        rec_items = tf.math.top_k(score, k=topk).indices
+        rec_items = tf.gather(rec_items, list(labels.keys())).numpy()
         metrics[f"Recall@{topk}"]    = calculate_recall(labels, rec_items)
         metrics[f"Precision@{topk}"] = calculate_precision(labels, rec_items)
         metrics[f"NDCG@{topk}"]      = calculate_ndcg(labels, rec_items)
@@ -81,6 +89,8 @@ def mock_unbias_evaluation(
 
 
 def main(seed: int, param: dict, path: str):
+    # set GPU memory limit
+    utils.set_gpu_memory_limitation(memory=10)
     # set tensorflow global random seed
     random.seed(seed)
     tf.random.set_seed(seed)
@@ -111,7 +121,7 @@ def main(seed: int, param: dict, path: str):
         n_pops=param['n_pops'],
         fit_intercept=True
     )
-    dataloader = create_dataloader(dataset, batch_size=40960)
+    dataloader = create_dataloader(dataset, batch_size=20480)
 
     # train model using Newton's method
     lr = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -179,11 +189,15 @@ def main(seed: int, param: dict, path: str):
 
 if __name__ == "__main__":
     PATH = "./tests/mocks/simulation/results/study1.pkl"
-    # if os.path.exists(PATH):
-    #     os.remove(PATH)
+    if os.path.exists(PATH):
+        df = pd.read_pickle(PATH)
+        start_idx = len(df)
+    else:
+        start_idx = 0
 
     PARAM_GRIDS = list(dict(zip(PARAM_GRID.keys(), val)) for val in itertools.product(*PARAM_GRID.values()))
     SEED = 1234
+    COOL_DOWN_ROUND = 10
 
     # generate params
     random_state = np.random.RandomState(SEED)
@@ -194,6 +208,24 @@ if __name__ == "__main__":
             params.append((seed, param))
 
     # run main
-    params = params[10:]
+    params = params[start_idx:]
+    mp.set_start_method('spawn')
+    idx = 0
     for seed, param in tqdm(params, ncols=100):
-        main(seed, param, PATH)
+        while True:
+            job = mp.Process(target=main, args=(seed, param, PATH))
+            job.start()
+            job.join()
+            # clear session
+            gc.collect()
+            tf.keras.backend.clear_session()            
+            time.sleep(1)
+
+            # check if the job is successful
+            if job.exitcode == 0:
+                break
+            
+        idx += 1
+        # cool down
+        if idx % COOL_DOWN_ROUND == 0:
+            time.sleep(60)

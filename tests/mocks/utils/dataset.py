@@ -53,6 +53,7 @@ def generate_map_recommend_mockdata(
         items = gen.multivariate_normal(mean=mean_items, cov=cov_items, size=n_items)
         # generate items pop clusters
         items_pop_idx = np.arange(n_items) % n_pops
+        gen.shuffle(items_pop_idx)
         
         logits = ((users @ beta_user)[:, np.newaxis] + (items @ beta_item)[np.newaxis, :]) + intercept
         if not unbias:

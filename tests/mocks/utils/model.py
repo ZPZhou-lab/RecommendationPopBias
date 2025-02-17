@@ -98,7 +98,7 @@ class BetaMAPEstimator(Model):
 
         return {'loss': loss}
 
-    def train_step_newton(self, data, lr=1e-3, l2_reg=0.0):
+    def train_step_newton(self, data, lr=1.0, l2_reg=0.0):
         # update variables using Newton-Raphson method
         _, _, items_pop_idx, users, items, clicks = data
         covariate, logits = self((users, items, items_pop_idx))
@@ -171,7 +171,26 @@ class BetaMAPEstimator(Model):
         inv_sigmoid = lambda x: tf.math.log(x / (1 - x))
         eps = 1 - tf.exp(-pop_bias / self.beta)
         self.log_pop_bias_eps.assign(inv_sigmoid(eps))
+
+
+class BetaNoDebiasEstimator(BetaMAPEstimator):
+    def __init__(self, n_features, **kwargs):
+        super(BetaNoDebiasEstimator, self).__init__(n_features, 1, fit_intercept=True, **kwargs)
+        # reset pop_bias
+        self.log_pop_bias_eps = tf.Variable(tf.zeros([1, ]), trainable=False, name='log_pop_bias_eps')
     
+    def call(self, inputs):
+        # users, items with shape (batch_size, n_features)
+        users, items, items_pop_idx = inputs
+        covariate = tf.concat([
+            users, items, tf.zeros([tf.shape(users)[0], 1]), tf.ones([tf.shape(users)[0], 1])
+        ], axis=1)
+        logits = tf.reduce_sum(covariate * self.coef, axis=1)
+        return covariate, logits
+    
+    def estimate_beta_map(self, steps: int = 10000, epsilon: float = 0.000001):
+        pass
+
 
 class BetaVariationalEstimator(Model):
     def __init__(
