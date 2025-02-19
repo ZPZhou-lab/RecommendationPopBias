@@ -178,8 +178,8 @@ class LogNormal(Gaussian):
     def sample(self, n_samples: int=1):
         return tf.exp(super().sample(n_samples))
     
-    def sample_from_indices(self, indices: tf.Tensor):
-        return tf.exp(super().sample_from_indices(indices))
+    def sample_from_indices(self, indices: tf.Tensor, n_samples: int=1):
+        return tf.exp(super().sample_from_indices(indices, n_samples))
 
     def interval_estimate(self, alpha: float = 0.05, bounds: str = "two-sided"):
         lower, upper = super().interval_estimate(alpha, bounds)

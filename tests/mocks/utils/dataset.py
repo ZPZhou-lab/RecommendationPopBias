@@ -20,7 +20,8 @@ class RecommenderMockDataset:
     pop_bias: np.ndarray = None
     intercept: float = None
     pop_beta: float = None
-    pop_bias_mean: float = None
+    pop_bias_mu: float = None
+    pop_bias_scale: float = None
 
 
 def generate_map_recommend_mockdata(
@@ -103,14 +104,16 @@ def generate_map_recommend_mockdata(
 def generate_bayesian_recommend_mockdata(
     n_features: int=5,
     n_users: int=10000,
-    n_items: int=100,
+    n_items: int=1000,
+    n_pops: int=200,
     p: float=0.05,
     pop_beta: float=0.5,
-    noise: float=0.0,
     seed: int=None,
     pop_eps: float=1e-6,
-    pop_dist: str="normal",
-    pop_bias_scale: Union[float, np.ndarray]=0.1
+    unbias: bool=False,
+    pop_dist: str="lognormal",
+    pop_bias_scale: Union[float, np.ndarray]=0.1,
+    **kwargs
 ):
     """
     generate Bayesian recommender mock data,\
@@ -123,42 +126,64 @@ def generate_bayesian_recommend_mockdata(
     in which, `item_pop_bias` sampled from a distribution `F(mu, ...)`, F can be normal, log-normal, etc
 
     """
+    def _generate_clicks(gen, beta_user, beta_item, intercept, pop_bias_mu, pop_bias_scale):
+        # generate user and item features
+        cov_users = np.eye(n_features) / n_features**2
+        users = gen.multivariate_normal(mean=np.zeros(n_features), cov=cov_users, size=n_users)
+        # generate items features
+        mean_items = np.zeros(n_features)
+        cov_items = np.eye(n_features) / n_features**2
+        items = gen.multivariate_normal(mean=mean_items, cov=cov_items, size=n_items)
+        # generate items pop clusters
+        items_pop_idx = np.arange(n_items) % n_pops
+        gen.shuffle(items_pop_idx)
+        
+        logits = ((users @ beta_user)[:, np.newaxis] + (items @ beta_item)[np.newaxis, :]) + intercept
+        if not unbias:
+            # sample popularity bias for each item
+            for i in range(n_items):
+                mu = pop_bias_mu[items_pop_idx[i]]
+                scale = pop_bias_scale[items_pop_idx[i]]
+                if pop_dist == 'normal':
+                    pop_bias = gen.normal(loc=mu, scale=scale, size=n_users)
+                elif pop_dist == 'lognormal':
+                    mu = np.log(mu)
+                    pop_bias = gen.lognormal(mu, scale, size=n_users)
+                else:
+                    raise ValueError(f"Invalid popularity distribution: {pop_dist}")
+                logits[:, i] += pop_bias
+        
+        # generate binary data
+        probs = sigmoid(logits)
+        clicks = gen.binomial(n=1, p=probs)
+
+        return users, items, logits, clicks, items_pop_idx
+    
     # get random generator
     seed = seed or np.random.randint(0, int(1e6))
     gen = np.random.RandomState(seed)
 
-    # generate user and item features
-    users = gen.multivariate_normal(mean=np.zeros(n_features), cov=np.eye(n_features), size=n_users) / n_features
-    items = gen.multivariate_normal(mean=np.zeros(n_features), cov=np.eye(n_features), size=n_items) / n_features
     # generate beta
-    beta_user = gen.normal(loc=0, scale=1, size=n_features) 
-    beta_item = gen.normal(loc=0, scale=1, size=n_features)
-    intercept = inv_sigmoid(p)
-    logits = ((users @ beta_user)[:, np.newaxis] + (items @ beta_item)[np.newaxis, :])  + intercept 
-    noise = gen.normal(loc=0, scale=noise, size=logits.shape)
-    logits += noise
-
-    # generate popularity
-    pops = gen.exponential(scale=pop_beta, size=(n_items, ))
-    pop_bias_scale = [pop_bias_scale] * n_items if isinstance(pop_bias_scale, (int, float)) else pop_bias_scale
-    pop_bias_mean = []
-    for i in range(n_items):
-        # sample popularity bias for given mean pops[i]
-        if pop_dist == 'normal':
-            pop_bias = gen.normal(loc=pops[i], scale=pop_bias_scale[i], size=n_users)
-        elif pop_dist == 'lognormal':
-            mean = np.log(pops[i])
-            pop_bias = gen.lognormal(mean, pop_bias_scale[i], size=n_users)
-        else:
-            raise ValueError(f"Invalid popularity distribution: {pop_dist}")
+    if kwargs.get('params') is None:
+        beta_user = gen.normal(loc=0, scale=1, size=n_features) 
+        beta_item = gen.normal(loc=0, scale=1, size=n_features)
+        intercept = inv_sigmoid(p)
+        # generate popularity
+        pop_bias_mu = gen.exponential(scale=pop_beta, size=(n_pops, ))
+    else:
+        beta_user   = kwargs['params']['beta_user']
+        beta_item   = kwargs['params']['beta_item']
+        intercept   = kwargs['params']['intercept']
+        pop_bias_mu = kwargs['params']['pop_bias_mu']
     
-        logits[:, i] += pop_bias
-        pop_bias_mean.append(pop_bias.mean())
+    if isinstance(pop_bias_scale, (int, float)):
+        pop_bias_scale = [pop_bias_scale] * n_pops
+    else:
+        assert len(pop_bias_scale) == n_pops, "pop_bias_scale must have the same length as n_pops"
+    # generate user and item features
+    users, items, logits, clicks, items_pop_idx = \
+        _generate_clicks(gen, beta_user, beta_item, intercept, pop_bias_mu, pop_bias_scale)
     
-    probs = sigmoid(logits)
-    # generate binary data
-    clicks = gen.binomial(n=1, p=probs)
-
     # calculate items popularity
     items_pop = clicks.sum(axis=0)
     items_pop = items_pop / items_pop.sum()
@@ -166,8 +191,8 @@ def generate_bayesian_recommend_mockdata(
     items_pop[items_pop < pop_eps] = pop_eps
     
     return RecommenderMockDataset(
-        users, items, probs, clicks, items_pop, 
-        beta_user, beta_item, pops, intercept, pop_beta
+        users, items, items_pop_idx, logits, clicks, items_pop,
+        beta_user, beta_item, None, intercept, pop_beta, pop_bias_mu, pop_bias_scale
     )
 
 
