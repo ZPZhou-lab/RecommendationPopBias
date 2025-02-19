@@ -102,9 +102,7 @@ class BetaMAPEstimator(Model):
         # update variables using Newton-Raphson method
         _, _, items_pop_idx, users, items, clicks = data
         covariate, logits = self((users, items, items_pop_idx))
-        bce_loss = tf.keras.losses.binary_crossentropy(clicks, logits, from_logits=True)
-        loss = bce_loss
-        
+        loss = tf.keras.losses.binary_crossentropy(clicks, logits, from_logits=True)
         # calculate gradients
         probs = tf.sigmoid(logits)
         grads = tf.reduce_sum(tf.transpose(covariate) * (probs - clicks), axis=1)
@@ -302,8 +300,9 @@ class BetaVariationalEstimator(Model):
         self.optimizer.apply_gradients(zip(grads, trainable_vars))
 
         return {'loss': loss, 'bce_loss': bce_loss, 'kl_div': kl_div}
-    
 
+    def train_variational_newton(self, data, kl_reg: float=1e-4, L: int=1):
+        ...
 
 def train_estimator(
     model, 
@@ -384,7 +383,8 @@ def train_variational_estimator(
     kl_reg: float=0.0,
     L: int=1,
     update_pop_bias_prior_freq: int=-1,
-    epsilon: float=1e-6
+    epsilon: float=1e-6,
+    use_newton: bool=False,
 ):
     model.converged = False
     if optimizer is None:
@@ -396,6 +396,7 @@ def train_variational_estimator(
         )
         optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=lr)
     model.compile(optimizer=optimizer)
+    model._lbfgs_step_results = None
     step, norms, max_norm = 0, [], 1
     loss_total = tf.keras.metrics.Mean(name='loss_total')
 
@@ -403,7 +404,10 @@ def train_variational_estimator(
         vars_bef = [var.numpy() for var in model.trainable_variables]
         for _, data in enumerate(dataloader):
             # update model
-            loss_dict = model.train_variational_step(data, kl_reg, L)
+            if use_newton:
+                loss_dict = model.train_variational_newton(data, kl_reg, L)
+            else:
+                loss_dict = model.train_variational_step(data, kl_reg, L)
 
             # update loss
             step += 1

@@ -37,11 +37,6 @@ N_ITEMS = 1000
 N_POPS = 200
 POP_BIAS_SCALE = 0.1
 PROB = 0.05
-# define the grids
-PARAM_GRID = {
-    'n_users': [500, 1000, 2000, 5000],
-    'L': [1, 5],
-}
 
 def mock_unbias_evaluation(
     model_vi, model_mle,
@@ -140,6 +135,10 @@ def main(seed: int, param: dict, path: str,
         pop_bias_dist='lognormal',
         sigma_trainable=False
     )
+    vi.pop_bias_var.set_prior({
+        'mu': 0.0,
+        'log_sigma': np.log(POP_BIAS_SCALE)
+    })
     # train model using Newton's method
     lr = tf.keras.optimizers.schedules.ExponentialDecay(
         initial_learning_rate=1e-2,
@@ -224,7 +223,20 @@ if __name__ == "__main__":
     else:
         start_idx = 0
 
-    PARAM_GRIDS = list(dict(zip(PARAM_GRID.keys(), val)) for val in itertools.product(*PARAM_GRID.values()))
+    # define the grids
+    PARAM_GRID_TASK1 = {
+        'n_users': [500, 1000, 2000, 5000],
+        'L': [1],
+        'pop_beta': [0.2, 0.5, 1.0]
+    }
+    PARAM_GRID_TASK2 = {
+        'n_users': [5000],
+        'L': [1, 5],
+        'pop_beta': [0.5]
+    }
+
+    create_param_grid = lambda param_grid: list(dict(zip(param_grid.keys(), val)) for val in itertools.product(*param_grid.values()))
+    PARAM_GRIDS = create_param_grid(PARAM_GRID_TASK1) + create_param_grid(PARAM_GRID_TASK2)
     SEED = 1234
     COOL_DOWN_ROUND = 10
 
@@ -233,18 +245,17 @@ if __name__ == "__main__":
     beta_user = random_state.normal(0, 1, N_FEATURES)
     beta_item = random_state.normal(0, 1, N_FEATURES)
     intercept = np.log(PROB / (1 - PROB))
-    POP_BETA  = [0.2, 0.5, 1.0]
 
     params = []
-    for pop_beta in POP_BETA:
+    for param in PARAM_GRIDS:
+        pop_beta = param['pop_beta']
         mu = np.log(pop_beta)
         pop_bias_mu = random_state.lognormal(mean=mu, sigma=POP_BIAS_SCALE, size=(N_POPS,))
-        for param in PARAM_GRIDS:
-            for i in range(NUM_TRIALS):
-                seed = random_state.randint(0, 2**16)
-                params.append((
-                    seed, param, PATH, 
-                    beta_user, beta_item, intercept, pop_bias_mu))
+        for i in range(NUM_TRIALS):
+            seed = random_state.randint(0, 2**16)
+            params.append((
+                seed, param, PATH, 
+                beta_user, beta_item, intercept, pop_bias_mu))
     
     # run main
     params = params[start_idx:]
