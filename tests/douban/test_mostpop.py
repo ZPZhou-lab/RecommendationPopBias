@@ -1,16 +1,18 @@
+# set GPU memory limit
+from utils import utils
+utils.set_gpu_memory_limitation()
 import tensorflow as tf
+import numpy as np
 from core.dataset import PairwiseDataset
 from core.model import MostPopModel
 from evaluator.popularity import (
     calculate_recommendation_rate,
     calculate_popularity_vector
 )
-from evaluator.metrics import RecallCallback, PrecisionCallback, HitRateCallback, NDCGCallback
-from utils import utils
-# set GPU memory limit
-utils.set_gpu_memory_limitation()
+from evaluator.evaluate import evaluate_recommender
+from datetime import datetime
 
-if __name__ == "__main__":
+def main(params):
     dataset = PairwiseDataset(
         train_path='~/datasets/Douban/movie_filter/train_cross_table.csv',
         valid_path='~/datasets/Douban/movie_filter/test_valid_cross_table.csv',
@@ -22,17 +24,9 @@ if __name__ == "__main__":
     model.fit(dataset, period=None)
 
     # evaluate
-    recall      = RecallCallback.evaluate(dataset.valid, model, top_k=20)
-    precision   = PrecisionCallback.evaluate(dataset.valid, model, top_k=20)
-    hit_rate    = HitRateCallback.evaluate(dataset.valid, model, top_k=20)
-    ndcg        = NDCGCallback.evaluate(dataset.valid, model, top_k=20)
-
-    print(f"====== MostPopModel Evaluation ======")
-    print(f"Recall@20:      {recall:.4f}")
-    print(f"Precision@20:   {precision:.4f}")
-    print(f"HitRate@20:     {hit_rate:.4f}")
-    print(f"NDCG@20:        {ndcg:.4f}")
-
+    metrics = evaluate_recommender(model, dataset, top_k=[20, 50])
+    print(f"====== Metrics ======\n{metrics}")
+    
     # calculate recommendation rate
     popularity = calculate_popularity_vector(data=dataset.train.data, num_items=dataset.NUM_ITEMS)
     rec_items = model.recommend(dataset.train.users, top_k=20)
@@ -40,4 +34,16 @@ if __name__ == "__main__":
     print(f"====== Recommendation Rate ======\n{rate}")
 
     # save
-    rate.to_csv('./tests/douban/results/mostpop_rr.csv')
+    metrics['rate'] = str(rate.values)
+    metrics['model'] = params['model_name']
+    metrics['params'] = str(params)
+
+    return metrics, model
+
+
+if __name__ == "__main__":
+    params = {}
+    params['model_name'] = 'MostPop'
+    metrics, model = main(params)
+    time_suffix = datetime.now().strftime("%m%d%H%M")
+    metrics.to_excel(f"./tests/douban/results/{params['model_name']}_{time_suffix}_metrics.xlsx", index=False)

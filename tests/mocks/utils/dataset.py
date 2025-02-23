@@ -46,12 +46,18 @@ def generate_map_recommend_mockdata(
     """
     def _generate_clicks(gen, beta_user, beta_item, intercept, pop_bias):
         # generate user and item features
-        cov_users = np.eye(n_features) / n_features**2
-        users = gen.multivariate_normal(mean=np.zeros(n_features), cov=cov_users, size=n_users)
-        # generate items features
-        mean_items = np.zeros(n_features)
-        cov_items = np.eye(n_features) / n_features**2
-        items = gen.multivariate_normal(mean=mean_items, cov=cov_items, size=n_items)
+        sick = kwargs.get('sick', None)
+        if sick is not None:
+            rho, n_corr = sick['rho'], sick['n_corr']
+            users = generate_highly_correlated_data(gen, n_users, n_features, rho, n_corr)
+            items = generate_highly_correlated_data(gen, n_items, n_features, rho, n_corr)
+        else:
+            cov_users = np.eye(n_features) / n_features**2
+            users = gen.multivariate_normal(mean=np.zeros(n_features), cov=cov_users, size=n_users)
+            # generate items features
+            mean_items = np.zeros(n_features)
+            cov_items = np.eye(n_features) / n_features**2
+            items = gen.multivariate_normal(mean=mean_items, cov=cov_items, size=n_items)
         # generate items pop clusters
         items_pop_idx = np.arange(n_items) % n_pops
         gen.shuffle(items_pop_idx)
@@ -235,3 +241,29 @@ def create_dataloader(
             tf.TensorSpec(shape=(batch_size, ), dtype=tf.float32)
         )
     )
+
+
+def generate_highly_correlated_data(
+    gen: np.random.RandomState,
+    n_samples: int,
+    n_features: int,
+    rho: float=0.9,
+    n_corr: int=0
+):
+    # generate corr matrix
+    corr = rho / n_features**2
+    Sigma = np.full((n_features, n_features), 0.0)
+    # random correlation
+    redundent_features = gen.choice(n_features, n_corr+1, replace=False)
+    for i in range(n_features):
+        for j in range(i, n_features):
+            if i == j:
+                Sigma[i, j] = 1 / n_features**2
+            else:
+                if i in redundent_features and j in redundent_features:
+                    Sigma[i, j] = corr
+                    Sigma[j, i] = corr
+    
+    mean = np.zeros(n_features)
+    X = gen.multivariate_normal(mean, Sigma, size=n_samples)
+    return X

@@ -242,3 +242,37 @@ class NDCGCallback(Callback):
             rec_items=rec_items
         )
         return ndcg
+
+class RestoreBestCallback(Callback):
+    def __init__(self, 
+        metric: str,
+        maximize: bool=True
+    ):
+        super(RestoreBestCallback, self).__init__()
+        self.metric = metric
+        self.maximize = maximize
+        self.best = float('-inf') if maximize else float('inf')
+        self._restore_weights = None
+    
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        if self.maximize:
+            if logs[self.metric] > self.best:
+                self.best = logs[self.metric]
+                self._restore_weights = self.model.get_weights()
+        else:
+            if logs[self.metric] < self.best:
+                self.best = logs[self.metric]
+                self._restore_weights = self.model.get_weights()
+        # if model weights are nan or inf, restore the best model
+        if any([np.isnan(w).any() for w in self.model.get_weights()]):
+            if self._restore_weights is not None:
+                self.model.set_weights(self._restore_weights)
+                print(f"Restoring best model with {self.metric}={self.best}")
+        
+    def on_train_end(self, logs=None):
+        if self._restore_weights is not None:
+            self.model.set_weights(self._restore_weights)
+            print(f"Restoring best model with {self.metric}={self.best}")
+        else:
+            print("No best model found")

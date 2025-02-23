@@ -119,9 +119,14 @@ class BetaMAPEstimator(Model):
                            tf.ones([self.n_pops + 1, ])], axis=0)
             )
             H += l2_reg * reg
-        H_inv = tf.linalg.pinv(H)
 
+        
+        H_inv = tf.linalg.pinv(H)
         beta_step = tf.reduce_sum(H_inv * grads, axis=1)
+        
+        # get beta_step using linear solver
+        # beta_step = tf.linalg.solve(H, grads[:, None])[:, 0]
+        
         # scale beta_step by norm
         beta_step = tf.clip_by_norm(beta_step, 1.0)
         beta_step = tf.split(beta_step, [self.n_features, self.n_features, self.n_pops, 1], axis=0)

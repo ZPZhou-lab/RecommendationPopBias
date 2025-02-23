@@ -126,10 +126,14 @@ def bpr_loss_func(pos_score, neg_score):
     return -tf.math.log(tf.nn.sigmoid(pos_score - neg_score))
 
 def bce_loss_func(pos_score, neg_score):
-    pos_loss = -tf.math.log(tf.nn.sigmoid(pos_score))
-    neg_loss = -tf.math.log(1 - tf.nn.sigmoid(neg_score))
+    pos_loss = -tf.math.log(tf.nn.sigmoid(pos_score) + 1e-10)
+    neg_loss = -tf.math.log(1 - tf.nn.sigmoid(neg_score) + 1e-10)
     return pos_loss, neg_loss
 
-def reg_loss_func(users_embed, pos_items_embed, neg_items_embed):
-    reg_loss = tf.nn.l2_loss(users_embed) + tf.nn.l2_loss(pos_items_embed) + tf.nn.l2_loss(neg_items_embed)
+def reg_loss_func(users_embed, pos_items_embed, neg_items_embed=None):
+    reg_loss = 0
+    reg_loss += tf.sqrt(tf.reduce_sum(tf.square(users_embed)) + 1e-8)
+    reg_loss += tf.sqrt(tf.reduce_sum(tf.square(pos_items_embed)) + 1e-8)
+    if neg_items_embed is not None:
+        reg_loss += tf.sqrt(tf.reduce_sum(tf.square(neg_items_embed)) + 1e-8)
     return reg_loss

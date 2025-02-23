@@ -19,9 +19,11 @@ class PDADataset(PairwiseDataset):
         test_path: str,
         batch_size: int=1024,
         neg_sample: int=1,
+        global_pop: bool=True,
         **kwargs
     ):
         super().__init__(train_path, valid_path, test_path, batch_size, neg_sample)
+        self.global_pop = global_pop
         self.popularity = self.build_popularity(pop_eps=kwargs.get('pop_eps', 1e-8))
     
     def set_popularity(self, popularity: Dict[int, np.ndarray]):
@@ -64,7 +66,7 @@ class PDADataset(PairwiseDataset):
             remain_pos_items = list(set(user_items) - set(self.train.user_attr_item_sampled[user]))
             pos_item = np.random.choice(remain_pos_items)
             self.train.user_attr_item_sampled[user].append(pos_item)
-            pos_period = user_period[user_items.index(pos_item)]
+            pos_period = 0 if self.global_pop else user_period[user_items.index(pos_item)]
             pop_item_pop = self.popularity[pos_period][pos_item]
             # add positive items
             pos_items.append(pos_item)
@@ -112,14 +114,22 @@ class PDADataset(PairwiseDataset):
     def build_popularity(self, pop_eps: float=1e-8):
         # calculate popularity for each period
         popularity = {}
-        periods = self.train.data['period'].unique()
-        for period in periods:
-            data = self.train.data[self.train.data['period'] == period]
-            period_pop = calculate_popularity_vector(data, self.NUM_ITEMS, normalize=True)
-            # add small value to avoid zero popularity
-            period_pop[period_pop < pop_eps] = pop_eps
-            period_pop[period_pop > 1.0] = 1.0
-            popularity[period] = period_pop
-        print(f"The popularity is built for {len(popularity)} periods")
+        if self.global_pop:
+            data = self.train.data
+            pop = calculate_popularity_vector(data, self.NUM_ITEMS, normalize=True)
+            pop[pop < pop_eps] = pop_eps
+            pop[pop > 1.0] = 1.0
+            popularity[0] = pop
+            print(f"The global popularity is built")
+        else:
+            periods = self.train.data['period'].unique()
+            for period in periods:
+                data = self.train.data[self.train.data['period'] == period]
+                period_pop = calculate_popularity_vector(data, self.NUM_ITEMS, normalize=True)
+                # add small value to avoid zero popularity
+                period_pop[period_pop < pop_eps] = pop_eps
+                period_pop[period_pop > 1.0] = 1.0
+                popularity[period] = period_pop
+            print(f"The popularity is built for {len(popularity)} periods")
 
         return popularity

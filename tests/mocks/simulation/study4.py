@@ -10,6 +10,7 @@ from sklearn.metrics import roc_auc_score
 import time
 from tqdm import tqdm
 import multiprocessing as mp
+from joblib import Parallel, delayed
 import gc
 
 from tests.mocks.utils.dataset import (
@@ -96,7 +97,7 @@ def mock_unbias_evaluation(
 def main(seed: int, param: dict, path: str,
          beta_user, beta_item, intercept, pop_bias_mu):
     # set GPU memory limit
-    utils.set_gpu_memory_limitation(memory=10)
+    utils.set_gpu_memory_limitation(memory=6)
     # set tensorflow global random seed
     random.seed(seed)
     tf.random.set_seed(seed)
@@ -154,7 +155,7 @@ def main(seed: int, param: dict, path: str,
         dataloader=dataloader,
         optimizer=optimizer,
         epochs=10000,
-        max_steps=50000,
+        max_steps=30000,
         verbose=-1,
         L=param['L'],
         epsilon=1e-5
@@ -258,24 +259,16 @@ if __name__ == "__main__":
                 beta_user, beta_item, intercept, pop_bias_mu))
     
     # run main
-    params = params[start_idx:]
+    params = params[start_idx:70]
     print("Total jobs: ", len(params))
-    mp.set_start_method('spawn')
-    idx = 0
-    for param in tqdm(params):
-        # clear session
-        gc.collect()
-        tf.keras.backend.clear_session()
-        time.sleep(1)
-        
-        while True:
-            job = mp.Process(target=main, args=param)
-            job.start()
-            job.join()
-            if job.exitcode == 0:
-                break
+    NUM_PROCESS = 2
 
-        idx += 1
-        # cool down
-        if idx % COOL_DOWN_ROUND == 0:
-            time.sleep(60)
+    # submit jobs using multiple processes
+    mp.set_start_method('spawn')
+    # with mp.Pool(processes=NUM_PROCESS) as pool:
+    #     pool.map(submit_process_job, params)
+    Parallel(
+        n_jobs=NUM_PROCESS, 
+        backend='loky',
+        verbose=20
+    )(delayed(main)(*param) for param in tqdm(params))

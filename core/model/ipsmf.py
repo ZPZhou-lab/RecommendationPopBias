@@ -16,6 +16,7 @@ class IPSMMatrixFactorization(BPRMatrixFactorization):
         super(IPSMMatrixFactorization, self).__init__(num_users, num_items, embed_size, loss_func, add_bias, **kwargs)
         self.popularity = kwargs.get('popularity', None)
         self.loss_func = loss_func.lower()
+        self.tau = kwargs.get('tau', 1000)
 
     def set_popularity(self, popularity, eps: float=1e-6):
         assert len(popularity) == self.num_items, 'Popularity length should be equal to the number of items'
@@ -38,13 +39,22 @@ class IPSMMatrixFactorization(BPRMatrixFactorization):
 
             # normalize the weights
             if self.loss_func == 'normalized':
-                pos_weight = pos_weight / (tf.reduce_sum(pos_weight) + tf.reduce_sum(neg_weight))
-                neg_weight = neg_weight / (tf.reduce_sum(pos_weight) + tf.reduce_sum(neg_weight))
-                ips_loss = tf.reduce_sum(pos_weight * pos_loss + neg_weight * neg_loss)
+                pos_weight = pos_weight / (tf.reduce_sum(pos_weight))
+                neg_weight = neg_weight / (tf.reduce_sum(neg_weight))
+                ips_loss = pos_weight * pos_loss + neg_weight * neg_loss
+                scale_factor = 1.0
             # IPS loss
-            else:
-                ips_loss = tf.reduce_mean(pos_weight * pos_loss + neg_weight * neg_loss)
-            
+            elif self.loss_func == 'clip':
+                # clip the weights
+                pos_weight = tf.clip_by_value(pos_weight, 0, self.tau)
+                neg_weight = tf.clip_by_value(neg_weight, 0, self.tau)
+                ips_loss = pos_weight * pos_loss + neg_weight * neg_loss
+                scale_factor = tf.cast(tf.shape(pos_score)[0], tf.float32)
+             
+            ips_loss = tf.where(tf.math.is_inf(ips_loss), tf.zeros_like(ips_loss), ips_loss)
+            ips_loss = tf.where(tf.math.is_nan(ips_loss), tf.zeros_like(ips_loss), ips_loss)
+            ips_loss = tf.reduce_sum(ips_loss) / scale_factor
+
             # regularization
             reg_loss = reg_loss_func(outputs.users_embed, outputs.pos_items_embed, outputs.neg_items_embed)
             reg_loss = self.l2_reg * reg_loss / tf.cast(tf.shape(pos_score)[0], tf.float32)
@@ -52,6 +62,8 @@ class IPSMMatrixFactorization(BPRMatrixFactorization):
 
         # compute the gradients
         grads = tape.gradient(loss, self.trainable_variables)
+        # clip the gradients for nan and inf values
+        grads = [tf.where(tf.math.is_nan(grad), tf.zeros_like(grad), grad) for grad in grads]
         self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
         
         return {f'ips_loss': ips_loss, 'reg_loss': reg_loss}

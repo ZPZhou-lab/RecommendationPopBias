@@ -147,51 +147,6 @@ class BasicDataset:
         for worker in pool:
             worker.join()
 
-    # def create_dataset_iter(self,
-    #     max_workers: int=4,
-    #     max_steps: int=None
-    # ):
-    #     """
-    #     To create a pair-wise dataloader for training using multiprocessing for data sampling,\
-    #     each worker samples a batch of users randomly and independently. Some users may not be sampled in each epoch.
-    #     """
-
-    #     def _worker(queue: Queue, steps, queue_info: Queue):
-    #         step = 0
-    #         while step < steps:
-    #             users = np.random.choice(self.train.users, size=self.batch_size, replace=False)
-    #             batch = self._sampling(users)
-    #             queue.put(batch)
-    #             step += 1
-    #         out = queue_info.get()
-    #         queue.cancel_join_thread()
-            
-    #     # shuffle users and split into chunks
-    #     batch_queue = Queue(maxsize=2048)
-    #     queue_info  = mp.Manager().Queue(max_workers)
-
-    #     # set max_steps
-    #     max_steps = math.ceil(self.train.size / self.batch_size) if max_steps is None else max_steps
-    #     self.max_steps = max_steps if self.max_steps is None else self.max_steps
-
-    #     # create pool
-    #     pool = []
-    #     worker_steps = math.ceil(max_steps / max_workers)
-    #     for _ in range(max_workers):
-    #         pool.append(Process(target=_worker, args=(batch_queue, worker_steps, queue_info)))
-    #     for worker in pool:
-    #         worker.start()
-        
-    #     for _ in range(self.max_steps):
-    #         batch = batch_queue.get(True, timeout=10)
-    #         yield batch
-        
-    #     # stop workers
-    #     for _ in range(max_workers):
-    #         queue_info.put('out')
-    #     for worker in pool:
-    #         worker.join()
-        
 
 def load_and_create_dataset(
     data_path: str
