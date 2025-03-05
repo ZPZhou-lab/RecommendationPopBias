@@ -28,6 +28,7 @@ class HiddenPopMatrixFactorization(BaseRecommender):
         global_pop: bool = True,
         num_periods: int = 1,
         pop_eps: float = 1e-6,
+        penalize_bias: float = 0.0,
         **kwargs
     ):
         """
@@ -50,6 +51,7 @@ class HiddenPopMatrixFactorization(BaseRecommender):
         self.global_pop = global_pop
         self.num_periods = 1 if global_pop else num_periods
         self.pop_eps = pop_eps
+        self.penalize_bias = penalize_bias
         # embedding table
         self.user_embed = Embedding(num_users, embed_size, name='user_embed', 
                                     embeddings_initializer='glorot_uniform')
@@ -74,7 +76,7 @@ class HiddenPopMatrixFactorization(BaseRecommender):
         """repameterize pop_bias from exponential distribution"""
         eps = tf.nn.sigmoid(self.log_pop_bias_eps) # transform to [0, 1]
         pops = -1.0 * self.beta * tf.math.log(1 - eps)
-        pops = tf.clip_by_value(pops, self.pop_eps, 10)
+        pops = tf.clip_by_value(pops, self.pop_eps, 100)
         return pops
     
     def estimate_beta_map(self, steps: int=10000, epsilon: float=1e-6):
@@ -137,14 +139,14 @@ class HiddenPopMatrixFactorization(BaseRecommender):
         return outputs
 
 
-    def _recommend_batch(self, users, items=None, top_k: int=None):
+    def _recommend_batch(self, users, items=None, top_k: int=None, unbias: bool=False):
         items = items if items is not None else tf.range(self.num_items)
         user_embed = self.user_embed(users)
         item_embed = self.item_embed(items)
         # scores shape (num_users, num_items)
         scores = tf.matmul(user_embed, item_embed, transpose_b=True) + self.intercept
         if self.adjust:
-            scores += tf.gather(self.pop_bias, items)[None, :]
+            scores += tf.gather(self.pop_bias[self.num_periods - 1, :], items)[None, :]
 
         # execute in CPU
         with tf.device('/CPU:0'):
@@ -172,6 +174,7 @@ class HiddenPopMatrixFactorization(BaseRecommender):
                 # regularization
                 reg_loss = reg_loss_func(outputs.users_embed, outputs.pos_items_embed, outputs.neg_items_embed)
                 reg_loss = self.l2_reg * reg_loss / tf.cast(tf.shape(pos_score)[0], tf.float32)
+                reg_loss += self.penalize_bias * tf.sqrt(tf.reduce_mean(self.pop_bias ** 2))
                 loss = mf_loss + reg_loss
 
             # compute the gradients
@@ -189,12 +192,144 @@ class HiddenPopMatrixFactorization(BaseRecommender):
                 # regularization
                 reg_loss = reg_loss_func(outputs.users_embed, outputs.pos_items_embed)
                 reg_loss = self.l2_reg * reg_loss / tf.cast(tf.shape(scores)[0], tf.float32)
+                reg_loss += self.penalize_bias * tf.sqrt(tf.reduce_mean(self.pop_bias ** 2))
                 loss = mf_loss + reg_loss
 
             # compute the gradients
             grads = tape.gradient(loss, self.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
             return {f'{self.loss_func}_loss': mf_loss, 'reg_loss': reg_loss}
+
+
+
+class HiddenPopVariationalMF(HiddenPopMatrixFactorization):
+    def __init__(self, 
+        num_users: int, 
+        num_items: int, 
+        embed_size: int = 32,
+        loss_func: str = 'BCE',
+        adjust: bool = False,
+        pair_wise: bool = True,
+        global_pop: bool = True,
+        num_periods: int = 1,
+        pop_eps: float = 1e-6,
+        penalize_bias: float = 0.0,
+        log_sigma: float = -1.0,
+        sigma_trainable: bool = False,
+        **kwargs
+    ):
+        super(HiddenPopVariationalMF, self).__init__(
+            num_users, num_items, embed_size, loss_func, adjust, pair_wise, global_pop, num_periods, pop_eps, penalize_bias, **kwargs
+        )
+        # remove log_beta and log_pop_bias_eps
+        self.log_beta, self.log_pop_bias_eps = None, None
+        delattr(self, 'log_beta'); delattr(self, 'log_pop_bias_eps')
+        # create the variational parameters
+        self.pop_bias_var = LogNormal(
+            mu=0.0, 
+            log_sigma=log_sigma, 
+            size=self.num_periods * self.num_items,
+            heteroscedasticity=False,
+            sigma_trainable=sigma_trainable
+        )
+    
+    @property
+    def pop_bias_mu(self):
+        """repameterize pop_bias from lognormal distribution"""
+        bias = tf.exp(self.pop_bias_var.mu)
+        bias = tf.reshape(bias, [self.num_periods, self.num_items])
+        bias = tf.clip_by_value(bias, self.pop_eps, 100)
+        return bias
+    
+    @property
+    def pop_bias_mean_field(self):
+        # mean field approximation for pop_bias
+        bias = tf.exp(self.pop_bias_var.mu + 0.5 * self.pop_bias_var.sigma**2)
+        bias = tf.reshape(bias, [self.num_periods, self.num_items])
+        bias = tf.clip_by_value(bias, self.pop_eps, 100)
+        return bias
+
+    def call(self, inputs):
+        # all has shape (batch_size, )
+        if self.pair_wise:
+            users, pos_items, neg_items, pos_items_pop, neg_items_pop, periods = inputs
+            
+            # sampling pop_bias
+            pos_pop_bias = self.pop_bias_var.sample_from_indices(indices=periods * self.num_items + pos_items)[0]
+            neg_pop_bias = self.pop_bias_var.sample_from_indices(indices=periods * self.num_items + neg_items)[0]
+
+            # do the embedding
+            user_embed = self.user_embed(users)
+            pos_item_embed = self.item_embed(pos_items)
+            pos_score = tf.reduce_sum(user_embed * pos_item_embed, axis=1) + self.intercept
+            pos_score += pos_pop_bias
+
+            neg_item_embed = self.item_embed(neg_items)
+            neg_score = tf.reduce_sum(user_embed * neg_item_embed, axis=1) + self.intercept
+            neg_score += neg_pop_bias
+
+            outputs = HiddenPopMFOutput(
+                users_embed=user_embed,
+                pos_items_embed=pos_item_embed,
+                pos_score=pos_score,
+                neg_items_embed=neg_item_embed,
+                neg_score=neg_score
+            )
+            return outputs
+        else:
+            raise ValueError("Not implemented yet")
+
+    def train_step(self, data):
+        if self.pair_wise:
+            with tf.GradientTape() as tape:
+                outputs = self(data)
+                pos_score, neg_score = outputs.pos_score, outputs.neg_score
+                
+                # calculate the loss
+                if self.loss_func == 'BPR':
+                    mf_loss = bpr_loss_func(pos_score, neg_score)
+                elif self.loss_func == 'BCE':
+                    pos_loss, neg_loss = bce_loss_func(pos_score, neg_score)
+                    mf_loss = pos_loss + neg_loss
+                else:
+                    raise ValueError('Invalid loss function')
+
+                # numerical protection
+                mf_loss = tf.where(tf.math.is_inf(mf_loss), tf.zeros_like(mf_loss), mf_loss)
+                mf_loss = tf.where(tf.math.is_nan(mf_loss), tf.zeros_like(mf_loss), mf_loss)
+                mf_loss = tf.reduce_mean(mf_loss)
+
+                # regularization
+                reg_loss = reg_loss_func(outputs.users_embed, outputs.pos_items_embed, outputs.neg_items_embed)
+                reg_loss = self.l2_reg * reg_loss / tf.cast(tf.shape(pos_score)[0], tf.float32)
+                reg_loss += self.penalize_bias * tf.sqrt(tf.reduce_mean(self.pop_bias_mu ** 2))
+                loss = mf_loss + reg_loss
+
+            # compute the gradients
+            grads = tape.gradient(loss, self.trainable_variables)
+            # avoid nan or inf
+            # grads = [tf.where(tf.math.is_nan(grad), tf.zeros_like(grad), grad) for grad in grads]
+            self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
+            return {f'{self.loss_func}_loss': mf_loss, 'reg_loss': reg_loss}
+        else:
+            raise ValueError("Not implemented yet")
+    
+    def _recommend_batch(self, users, items=None, top_k: int=None, unbias: bool=False):
+        items = items if items is not None else tf.range(self.num_items)
+        user_embed = self.user_embed(users)
+        item_embed = self.item_embed(items)
+        # scores shape (num_users, num_items)
+        scores = tf.matmul(user_embed, item_embed, transpose_b=True) + self.intercept
+        if self.adjust and not unbias:
+            scores += tf.gather(self.pop_bias_mu[self.num_periods - 1, :], items)[None, :]
+
+        # execute in CPU
+        with tf.device('/CPU:0'):
+            if top_k is not None:
+                top_k = tf.math.top_k(scores, k=top_k).indices
+                return top_k.numpy()
+            else:
+                return scores.numpy()
 
 
 class BetaUpdateCallback(Callback):

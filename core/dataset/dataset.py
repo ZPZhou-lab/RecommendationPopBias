@@ -58,9 +58,12 @@ class BasicDataset:
         self.max_steps = None
         self.neg_sample = neg_sample
         # init sampling records
-        self.train.user_attr_item_sampled = {user: [] for user in self.train.users}
+        self.train.user_attr_item_sampled = {user: [] for user in self.train.users}            
     
-
+    def add_unbias_data(self, unbias_path: str, periods: List[int]=None):
+        self.unbias = load_and_create_dataset(unbias_path, periods)
+        print(f"Unbias Dataset Size: {self.unbias.size}")
+    
     def sample(self, batch_size: int=None):
         """
         To sample a pair-wise batch of data in training set
@@ -149,11 +152,14 @@ class BasicDataset:
 
 
 def load_and_create_dataset(
-    data_path: str
+    data_path: str,
+    periods: List[int]=None
 ):
     # load [user_id, item_id, period, rating] data
     data = pd.read_csv(data_path, index_col=0)
     data.reset_index(drop=True, inplace=True)
+    if periods is not None:
+        data = data[data['period'].isin(periods)]
     # create user, item sets
     users, items = data['user_id'].unique(), data['item_id'].unique()
     num_users, num_items = users.max() + 1, items.max() + 1

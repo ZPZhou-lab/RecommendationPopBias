@@ -5,7 +5,8 @@ import pandas as pd
 def evaluate_recommender(
     model,
     dataset,
-    top_k: List[int] = [20, 50]
+    top_k: List[int] = [20, 50],
+    unbias_top_k: List[int] = None
 ):
     # iter on each top_k
     metrics = pd.DataFrame(
@@ -21,5 +22,14 @@ def evaluate_recommender(
 
             # add to metrics
             metrics.loc[len(metrics)] = [top, set_, recall, precision, hit_rate, ndcg]
+    if unbias_top_k is not None:
+        for top in unbias_top_k:
+            # evaluate on testset
+            recall    = RecallCallback.evaluate(dataset.unbias, model, top_k=top, unbias=True)
+            precision = PrecisionCallback.evaluate(dataset.unbias, model, top_k=top, unbias=True)
+            hit_rate  = HitRateCallback.evaluate(dataset.unbias, model, top_k=top, unbias=True)
+            ndcg      = NDCGCallback.evaluate(dataset.unbias, model, top_k=top, unbias=True)
+            # add to metrics
+            metrics.loc[len(metrics)] = [top, 'unbias', recall, precision, hit_rate, ndcg]
 
     return metrics

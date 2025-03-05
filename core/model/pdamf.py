@@ -62,7 +62,7 @@ class PDAMatrixFactorization(BPRMatrixFactorization):
             neg_score=outputs.neg_score
         )
     
-    def _recommend_batch(self, users, items=None, top_k: int=None):
+    def _recommend_batch(self, users, items=None, top_k: int=None, unbias: bool=False):
         if self.adjust:
             assert self.popularity is not None, 'Popularity is not set, please set popularity using set_popularity method before sampling'
             # get scores
@@ -78,7 +78,7 @@ class PDAMatrixFactorization(BPRMatrixFactorization):
                     return top_k.numpy()
         else:
             # PD model, only return the scores
-            return super()._recommend_batch(users, items, top_k)
+            return super()._recommend_batch(users, items, top_k, unbias)
     
     def train_step(self, data):
         return super().train_step(data)

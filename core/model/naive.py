@@ -34,7 +34,7 @@ class MostPopModel(BaseRecommender):
         ).values
         self.popularity = tf.constant(self.popularity, dtype=tf.float32)
 
-    def _recommend_batch(self, users, items=None, top_k: int=None):
+    def _recommend_batch(self, users, items=None, top_k: int=None, unbias: bool=False):
         # get the popularity of each item
         num_users = len(users)
         if items is None:
@@ -44,7 +44,18 @@ class MostPopModel(BaseRecommender):
         else:
             # look up the popularity of the given items and then get the top_k items
             top_k = min(len(items), top_k) if top_k is not None else len(items)
-            top_k = tf.math.top_k(tf.gather(self.popularity, items), k=top_k).indices
+            # mask the popularity = -1 for non-given items
+            non_given_items = tf.ones(self.num_items, dtype=tf.bool)
+            non_given_items = tf.tensor_scatter_nd_update(
+                non_given_items, 
+                items[:, tf.newaxis],
+                tf.zeros_like(items, dtype=tf.bool))
+            popularity = tf.where(
+                non_given_items,
+                tf.zeros_like(self.popularity) - 1,
+                self.popularity
+            )
+            top_k = tf.math.top_k(popularity, k=top_k).indices
         
         # repeat the top_k items for each user
         with tf.device('/CPU:0'):

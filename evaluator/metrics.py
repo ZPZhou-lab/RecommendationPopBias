@@ -127,12 +127,13 @@ class RecallCallback(Callback):
             logs[f'Recall@{self.top_k} valid'] = recall
     
     @staticmethod
-    def evaluate(dataset: UserItemDataset, model, top_k: int=20, avg_user: bool=True):
+    def evaluate(dataset: UserItemDataset, model, top_k: int=20, avg_user: bool=True, unbias: bool=False):
         """
         evaluate recall on test set
         """
         users = dataset.users
-        rec_items = model.recommend(users, top_k=top_k)
+        items = dataset.items if unbias else None
+        rec_items = model.recommend(users, items=items, top_k=top_k, unbias=unbias)
         recall = calculate_recall(
             labels=dataset.user_attr_item,
             rec_items=rec_items, 
@@ -164,12 +165,13 @@ class PrecisionCallback(Callback):
             logs[f'Precision@{self.top_k} valid'] = precision
 
     @staticmethod
-    def evaluate(dataset: UserItemDataset, model, top_k: int=20, avg_user: bool=True):
+    def evaluate(dataset: UserItemDataset, model, top_k: int=20, avg_user: bool=True, unbias: bool=False):
         """
         evaluate precision on test set
         """
         users = dataset.users
-        rec_items = model.recommend(users, top_k=top_k)
+        items = dataset.items if unbias else None
+        rec_items = model.recommend(users, items=items, top_k=top_k, unbias=unbias)
         precision = calculate_precision(
             labels=dataset.user_attr_item,
             rec_items=rec_items, 
@@ -198,12 +200,13 @@ class HitRateCallback(Callback):
             logs[f'HitRate@{self.top_k} valid'] = hit_rate
 
     @staticmethod
-    def evaluate(dataset: UserItemDataset, model, top_k: int=20):
+    def evaluate(dataset: UserItemDataset, model, top_k: int=20, unbias: bool=False):
         """
         evaluate hit rate on test set
         """
         users = dataset.users
-        rec_items = model.recommend(users, top_k=top_k)
+        items = dataset.items if unbias else None
+        rec_items = model.recommend(users, items=items, top_k=top_k, unbias=unbias)
         hit_rate = calculate_hit_rate(
             labels=dataset.user_attr_item,
             rec_items=rec_items
@@ -231,12 +234,13 @@ class NDCGCallback(Callback):
             logs[f'NDCG@{self.top_k} valid'] = ndcg
 
     @staticmethod
-    def evaluate(dataset: UserItemDataset, model, top_k: int=20):
+    def evaluate(dataset: UserItemDataset, model, top_k: int=20, unbias: bool=False):
         """
         evaluate ndcg on test set
         """
         users = dataset.users
-        rec_items = model.recommend(users, top_k=top_k)
+        items = dataset.items if unbias else None
+        rec_items = model.recommend(users, items=items, top_k=top_k, unbias=unbias)
         ndcg = calculate_ndcg(
             labels=dataset.user_attr_item,
             rec_items=rec_items

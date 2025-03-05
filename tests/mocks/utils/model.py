@@ -176,6 +176,198 @@ class BetaMAPEstimator(Model):
         self.log_pop_bias_eps.assign(inv_sigmoid(eps))
 
 
+class BPREstimator(Model):
+    def __init__(self,
+        n_features,
+        embed_size: int=10,
+        **kwargs
+    ):
+        super(BPREstimator, self).__init__(**kwargs)
+        self.n_features = n_features
+        self.embed_size = embed_size
+        self.beta_user = tf.keras.layers.Dense(1, activation='sigmoid', name='beta_user', use_bias=False)
+        self.beta_item = tf.keras.layers.Dense(1, activation='sigmoid', name='beta_item', use_bias=False)
+        self.intercept = tf.Variable(tf.zeros([]), name='intercept')
+
+    def call(self, inputs):
+        # users, items with shape (batch_size, n_features)
+        users, items = inputs
+        beta_user = self.beta_user(users)
+        beta_item = self.beta_item(items)
+        logits = tf.reduce_sum(beta_user * beta_item, axis=1) + self.intercept
+        return logits
+    
+    def predict(self, 
+        users, items, items_pop_idx, 
+        unbias: bool=False):
+        # get n_users and n_items
+        n_users, n_items = users.shape[0], items.shape[0]
+        p_users, p_items = users.shape[1], items.shape[1]
+        logits = []
+
+        for i in range(n_users):
+            users_ = tf.tile(users[i][None,:], [n_items, 1])
+            beta_user = self.beta_user(users_)
+            beta_item = self.beta_item(items)
+            logits_ = tf.reduce_sum(beta_user * beta_item, axis=1) + self.intercept
+            logits.append(logits_)
+        
+        logits = tf.concat(logits, axis=0)
+        return logits, None
+    
+    def train_step(self, data):
+        # update variables using Gradient Descent
+        _, _, _, users, items, clicks = data
+        with tf.GradientTape() as tape:
+            logits = self((users, items))
+            bce_loss = tf.keras.losses.binary_crossentropy(clicks, logits, from_logits=True)
+            loss = bce_loss
+        trainable_vars = self.trainable_variables
+        grads = tape.gradient(loss, trainable_vars)
+        self.optimizer.apply_gradients(zip(grads, trainable_vars))
+
+        return {'loss': loss}
+
+
+class IPSEstimator(Model):
+    def __init__(self,
+        n_features,
+        loss_func: str='clip',
+        tau: float=1000.0,
+        **kwargs
+    ):
+        super(IPSEstimator, self).__init__(**kwargs)
+        self.n_features = n_features
+        self.loss_func = loss_func.lower()
+        self.tau = tau
+        self.beta_user = tf.keras.layers.Dense(1, name='beta_user', use_bias=False)
+        self.beta_item = tf.keras.layers.Dense(1, name='beta_item', use_bias=False)
+        self.intercept = tf.Variable(tf.zeros([]), name='intercept')
+        self.popularity = None
+    
+    def set_popularity(self, popularity, eps: float=1e-5):
+        popularity = popularity.astype(np.float32)
+        popularity = tf.clip_by_value(popularity, eps, 1.0)
+        self.popularity = tf.constant(popularity, dtype=tf.float32)
+    
+    def call(self, inputs):
+        # users, items with shape (batch_size, n_features)
+        users, items = inputs
+        beta_user = self.beta_user(users)[: ,0]
+        beta_item = self.beta_item(items)[: ,0]
+        logits = beta_user + beta_item + self.intercept
+        return logits
+    
+    def predict(self, 
+        users, items, items_pop_idx, 
+        unbias: bool=False):
+        # get n_users and n_items
+        n_users, n_items = users.shape[0], items.shape[0]
+        p_users, p_items = users.shape[1], items.shape[1]
+        logits = []
+
+        for i in range(n_users):
+            users_ = tf.tile(users[i][None,:], [n_items, 1])
+            beta_user = self.beta_user(users_)[:, 0]
+            beta_item = self.beta_item(items)[: ,0]
+            logits_ = beta_user + beta_item + self.intercept
+            logits.append(logits_)
+        
+        logits = tf.concat(logits, axis=0)
+        return logits, None
+    
+    def train_step(self, data):
+        # update variables using Gradient Descent
+        _, _, items_pop_idx, users, items, clicks = data
+        with tf.GradientTape() as tape:
+            logits = self((users, items))
+            clicks = tf.cast(clicks, tf.float32)
+            bce_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=clicks, logits=logits)
+            # calculate IPS loss
+            pops = tf.gather(self.popularity, items_pop_idx)
+            weight = 1.0 / pops
+            if self.loss_func == 'clip':
+                weight = tf.clip_by_value(weight, 0, self.tau)
+                loss = tf.reduce_mean(weight * bce_loss)
+            elif self.loss_func == 'norm':
+                weight = weight / tf.reduce_sum(weight)
+                loss = tf.reduce_sum(weight * bce_loss)
+        
+        trainable_vars = self.trainable_variables
+        grads = tape.gradient(loss, trainable_vars)
+        self.optimizer.apply_gradients(zip(grads, trainable_vars))
+
+        return {'loss': loss}
+    
+class PDAEstimator(Model):
+    def __init__(self,
+        n_features,
+        embed_size: int=10,
+        tau: float=0.5):
+        super(PDAEstimator, self).__init__()
+        self.n_features = n_features
+        self.embed_size = embed_size
+        self.tau = tau
+        self.beta_user = tf.keras.layers.Dense(1, activation='sigmoid', name='beta_user', use_bias=False)
+        self.beta_item = tf.keras.layers.Dense(1, activation='sigmoid', name='beta_item', use_bias=False)
+        self.intercept = tf.Variable(tf.zeros([]), name='intercept')
+    
+    def set_popularity(self, popularity, eps: float=1e-5):
+        popularity = popularity.astype(np.float32)
+        # normalize popularity
+        popularity = (popularity - np.min(popularity)) / (np.max(popularity) - np.min(popularity))
+        popularity[popularity < eps] = eps
+        popularity = tf.clip_by_value(popularity, eps, 1.0)
+        self.popularity = tf.constant(popularity, dtype=tf.float32)
+    
+    def call(self, inputs):
+        # users, items with shape (batch_size, n_features)
+        users, items, item_pop_idx = inputs
+        beta_user = self.beta_user(users)
+        beta_item = self.beta_item(items)
+        scores = tf.nn.elu(tf.reduce_sum(beta_user * beta_item, axis=1)) + 1.0
+        # add popularity bias
+        pops = tf.gather(self.popularity, item_pop_idx)
+        logits = scores * tf.pow(pops, self.tau) + self.intercept
+        return logits
+    
+    def predict(self,
+        users, items, item_pop_idx,
+        unbias: bool=False):
+        # get n_users and n_items
+        n_users, n_items = users.shape[0], items.shape[0]
+        p_users, p_items = users.shape[1], items.shape[1]
+        logits = []
+
+        for i in range(n_users):
+            users_ = tf.tile(users[i][None,:], [n_items, 1])
+            beta_user = self.beta_user(users_)
+            beta_item = self.beta_item(items)
+            scores = tf.nn.elu(tf.reduce_sum(beta_user * beta_item, axis=1)) + 1.0
+            if not unbias:
+                pops = tf.gather(self.popularity, item_pop_idx)
+                logits_ = scores * tf.pow(pops, self.tau)
+            else:
+                logits_ = scores
+            logits.append(logits_)
+        
+        logits = tf.concat(logits, axis=0)
+        return logits, None
+    
+    def train_step(self, data):
+        # update variables using Gradient Descent
+        _, _, items_pop_idx, users, items, clicks = data
+        with tf.GradientTape() as tape:
+            logits = self((users, items, items_pop_idx))
+            bce_loss = tf.keras.losses.binary_crossentropy(clicks, logits, from_logits=True)
+            loss = bce_loss
+        trainable_vars = self.trainable_variables
+        grads = tape.gradient(loss, trainable_vars)
+        self.optimizer.apply_gradients(zip(grads, trainable_vars))
+
+        return {'loss': loss}
+
+
 class BetaNoDebiasEstimator(BetaMAPEstimator):
     def __init__(self, n_features, **kwargs):
         super(BetaNoDebiasEstimator, self).__init__(n_features, 1, fit_intercept=True, **kwargs)
@@ -339,7 +531,8 @@ def train_estimator(
     loss_total = tf.keras.metrics.Mean(name='loss_total')
 
     for epoch in range(epochs):
-        vars_bef = [var.numpy() for var in model.trainable_variables if 'log_beta' not in var.name]
+        if epoch > 0:
+            vars_bef = [var.numpy() for var in model.trainable_variables if 'log_beta' not in var.name]
         # reset loss
         loss_total.reset_states()
         for _, data in enumerate(dataloader):
@@ -373,7 +566,8 @@ def train_estimator(
             break
 
     # estimate beta MAP
-    model.estimate_beta_map()
+    if hasattr(model, 'estimate_beta_map'):
+        model.estimate_beta_map()
     return model
 
 

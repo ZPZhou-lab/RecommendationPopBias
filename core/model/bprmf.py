@@ -76,7 +76,7 @@ class BPRMatrixFactorization(BaseRecommender):
         )
         return outputs
 
-    def _recommend_batch(self, users, items=None, top_k: int=None):
+    def _recommend_batch(self, users, items=None, top_k: int=None, unbias=False):
         items = items if items is not None else tf.range(self.num_items)
         user_embed = self.user_embed(users)
         item_embed = self.item_embed(items)

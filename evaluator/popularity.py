@@ -71,7 +71,7 @@ def calculate_js_divergence(dist1, dist2):
     mean_dist = 0.5 * (dist1 + dist2)
     
     # calculate KL divergence
-    eps = 0.0
+    eps = 1e-10
     kl1 = dist1 * np.log2(dist1 / (mean_dist + eps) + eps)
     kl2 = dist2 * np.log2(dist2 / (mean_dist + eps) + eps)
     # remove 0 values

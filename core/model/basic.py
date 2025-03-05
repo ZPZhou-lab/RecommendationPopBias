@@ -11,7 +11,7 @@ class BaseRecommender(Model):
         self.num_users = num_users
         self.num_items = num_items
     
-    def recommend(self, users, items=None, top_k: int=None, batch_size: int=1024):
+    def recommend(self, users, items=None, top_k: int=None, unbias: bool=False, batch_size: int=1024):
         """
         recommend items to users
         """
@@ -19,10 +19,10 @@ class BaseRecommender(Model):
         batchs = []
         for i in range(0, len(users), batch_size):
             batch_users = users[i:i+batch_size]
-            batchs.append(self._recommend_batch(batch_users, items, top_k))
+            batchs.append(self._recommend_batch(batch_users, items, top_k, unbias))
         return np.concatenate(batchs, axis=0)
     
-    def _recommend_batch(self, users, items=None, top_k: int=None) -> np.ndarray:
+    def _recommend_batch(self, users, items=None, top_k: int=None, unbias: bool=False) -> np.ndarray:
         raise NotImplementedError("_recommend_batch method not implemented")
     
     def fit(self, x=None, y=None, batch_size=None, epochs=1, verbose="auto", callbacks=None, validation_split=0, validation_data=None, shuffle=True, class_weight=None, sample_weight=None, initial_epoch=0, steps_per_epoch=None, validation_steps=None, validation_batch_size=None, validation_freq=1, max_queue_size=10, workers=1, use_multiprocessing=False):
