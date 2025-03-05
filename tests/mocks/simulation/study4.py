@@ -261,12 +261,10 @@ if __name__ == "__main__":
     # run main
     params = params[start_idx:70]
     print("Total jobs: ", len(params))
-    NUM_PROCESS = 2
+    NUM_PROCESS = 1
 
     # submit jobs using multiple processes
     mp.set_start_method('spawn')
-    # with mp.Pool(processes=NUM_PROCESS) as pool:
-    #     pool.map(submit_process_job, params)
     Parallel(
         n_jobs=NUM_PROCESS, 
         backend='loky',

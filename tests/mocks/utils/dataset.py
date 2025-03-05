@@ -143,13 +143,16 @@ def generate_bayesian_recommend_mockdata(
         # generate items pop clusters
         items_pop_idx = np.arange(n_items) % n_pops
         gen.shuffle(items_pop_idx)
+        items_pop_idx = items_pop_idx.astype(int)
         
         logits = ((users @ beta_user)[:, np.newaxis] + (items @ beta_item)[np.newaxis, :]) + intercept
         if not unbias:
+            pop_bias_mu_ = pop_bias_mu[items_pop_idx]
+            pop_bias_scale_ = pop_bias_scale[items_pop_idx]
             # sample popularity bias for each item
             for i in range(n_items):
-                mu = pop_bias_mu[items_pop_idx[i]]
-                scale = pop_bias_scale[items_pop_idx[i]]
+                mu = pop_bias_mu_[i]
+                scale = pop_bias_scale_[i]
                 if pop_dist == 'normal':
                     pop_bias = gen.normal(loc=mu, scale=scale, size=n_users)
                 elif pop_dist == 'lognormal':
@@ -157,7 +160,7 @@ def generate_bayesian_recommend_mockdata(
                     pop_bias = gen.lognormal(mu, scale, size=n_users)
                 else:
                     raise ValueError(f"Invalid popularity distribution: {pop_dist}")
-                logits[:, i] += pop_bias
+                logits[:, i] = logits[:, i] + pop_bias
         
         # generate binary data
         probs = sigmoid(logits)
@@ -184,6 +187,7 @@ def generate_bayesian_recommend_mockdata(
     
     if isinstance(pop_bias_scale, (int, float)):
         pop_bias_scale = [pop_bias_scale] * n_pops
+        pop_bias_scale = np.array(pop_bias_scale)
     else:
         assert len(pop_bias_scale) == n_pops, "pop_bias_scale must have the same length as n_pops"
     # generate user and item features

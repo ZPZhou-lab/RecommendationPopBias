@@ -34,8 +34,7 @@ from evaluator.metrics import (
 utils.set_gpu_memory_limitation(memory=6)
 
 # number of trials
-NUM_TRIALS = 10
-N_FEATURES = 10
+N_FEATURES = 5
 N_USERS = 5000
 N_ITEMS = 1000
 N_POPS = 200
@@ -93,6 +92,7 @@ def mock_unbias_evaluation(
             'pop_bias':  pop_bias
         }
     )
+    print(dataset.clicks.mean())
 
     metrics = _evaluate(model, dataset)
     return metrics
@@ -211,7 +211,7 @@ def main(seed: int, param: dict, path: str,
 
 
 if __name__ == "__main__":
-    PATH = "./tests/mocks/simulation/results/study2_ext.pkl"
+    PATH = "./tests/mocks/simulation/results/study2_ext_v3.pkl"
     if os.path.exists(PATH):
         df = pd.read_pickle(PATH)
         start_idx = len(df)
@@ -222,13 +222,15 @@ if __name__ == "__main__":
     SEED = 1234
     COOL_DOWN_ROUND = 10
     POP_BETAS = [0.2, 0.5, 1.0, 1.5, 2.0]
+    NUM_TRIALS = 10
+    # POP_BETAS = [1.0]
 
     random_state = np.random.RandomState(SEED)
     # generate parameters
     beta_user = random_state.normal(0, 1, N_FEATURES)
     beta_item = random_state.normal(0, 1, N_FEATURES)
     intercept = np.log(PROB / (1 - PROB))
-    seeds = random_state.randint(0, 2**16, size=(NUM_TRIALS, ))
+    seeds = random_state.randint(0, 2**16, size=(NUM_TRIALS, )).tolist()
     
     # generate params
     params = []
@@ -236,6 +238,7 @@ if __name__ == "__main__":
         pop_bias = random_state.exponential(scale=pop_beta, size=(N_POPS, ))
         for param in PARAM_GRIDS:
             for seed in seeds:
+                param['pop_beta'] = pop_beta
                 params.append((
                     seed, param, PATH,
                     beta_user, beta_item, intercept, pop_bias))
@@ -243,7 +246,7 @@ if __name__ == "__main__":
     # run main
     params = params[start_idx:]
     print("Total jobs: ", len(params))
-   
+
     # run main
     NUM_PROCESS = 1
     mp.set_start_method('spawn')
@@ -251,4 +254,4 @@ if __name__ == "__main__":
         n_jobs=NUM_PROCESS, 
         backend='loky',
         verbose=20
-    )(delayed(main)(*param) for param in tqdm(params))
+    )(delayed(main)(*param) for param in tqdm(params, ncols=50))

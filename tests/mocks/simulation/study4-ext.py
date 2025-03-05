@@ -35,15 +35,14 @@ from evaluator.metrics import (
 utils.set_gpu_memory_limitation(memory=6)
 
 # number of trials
-NUM_TRIALS = 10
 N_FEATURES = 5
 N_ITEMS = 1000
 N_POPS = 200
 POP_BIAS_SCALE = 0.1
-PROB = 0.05
+PROB = 0.01
 
 def mock_unbias_evaluation(
-    model,
+    model, seed,
     beta_user, beta_item, intercept, pop_bias_mu, 
     n_users: int=5000, unbias=True
 ):
@@ -67,7 +66,7 @@ def mock_unbias_evaluation(
             if len(user_items) > 0:
                 labels[i] = user_items
         
-        for topk in [10, 20, 50]:
+        for topk in [10, 20]:
             rec_items = tf.math.top_k(score, k=topk).indices
             rec_items = tf.gather(rec_items, list(labels.keys())).numpy()
             metrics[f"Recall@{topk}"]    = calculate_recall(labels, rec_items)
@@ -84,6 +83,7 @@ def mock_unbias_evaluation(
         unbias=unbias,
         pop_dist='lognormal',
         pop_bias_scale=POP_BIAS_SCALE,
+        seed=(seed * 10) % 2**16,
         params={
             'beta_user': beta_user,
             'beta_item': beta_item,
@@ -91,6 +91,7 @@ def mock_unbias_evaluation(
             'pop_bias_mu':  pop_bias_mu
         }
     )
+    print(dataset.clicks.mean())
 
     metrics = _evaluate(model, dataset)
     return metrics
@@ -176,14 +177,14 @@ def main(seed: int, param: dict, path: str,
 
     # create model
     model = build_model(param, popularity)
-    lr = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=1e-3,
-        decay_steps=1000,
-        decay_rate=0.95,
-        staircase=True
-    )
-    optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=lr)
     if param['model'] == 'vi-debias':
+        lr = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=1e-2,
+            decay_steps=1000,
+            decay_rate=0.9,
+            staircase=True
+        )
+        optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=lr)
         model = train_variational_estimator(
             model=model,
             dataloader=dataloader,
@@ -195,6 +196,13 @@ def main(seed: int, param: dict, path: str,
             epsilon=1e-4
         )
     else:
+        lr = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=1e-3,
+            decay_steps=1000,
+            decay_rate=0.9,
+            staircase=True
+        )
+        optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=lr)
         model = train_estimator(
             model=model,
             dataloader=dataloader,
@@ -210,11 +218,11 @@ def main(seed: int, param: dict, path: str,
 
     # evaluate unbias auc
     unbias_metrics = mock_unbias_evaluation(
-        model, dataset.beta_user, dataset.beta_item, dataset.intercept, dataset.pop_bias_mu,
+        model, seed, dataset.beta_user, dataset.beta_item, dataset.intercept, dataset.pop_bias_mu,
         n_users=5000, unbias=True
     )
     bias_metrics = mock_unbias_evaluation(
-        model, dataset.beta_user, dataset.beta_item, dataset.intercept, dataset.pop_bias_mu,
+        model, seed * 2, dataset.beta_user, dataset.beta_item, dataset.intercept, dataset.pop_bias_mu,
         n_users=5000, unbias=False
     )
     # logging progress
@@ -231,7 +239,7 @@ def main(seed: int, param: dict, path: str,
 
 
 if __name__ == "__main__":
-    PATH = "./tests/mocks/simulation/results/study4_ext.pkl"
+    PATH = "./tests/mocks/simulation/results/study4_ext_v3.pkl"
     if os.path.exists(PATH):
         df = pd.read_pickle(PATH)
         start_idx = len(df)
@@ -240,9 +248,10 @@ if __name__ == "__main__":
 
     # define the grids
     PARAM_GRID_TASK1 = {
-        'n_users': [1000, 2000, 5000],
+        # 'n_users': [1000, 2000, 5000],
+        'n_users': [5000],
         'L': [1],
-        'pop_beta': [0.2, 0.5, 1.0],
+        # 'pop_beta': [0.2, 0.5, 1.0],
         'model': ['bpr', 'ips-norm', 'ips-clip', 'pda', 'vi-debias', 'mle-debias']
     }
 
@@ -250,24 +259,26 @@ if __name__ == "__main__":
     PARAM_GRIDS = create_param_grid(PARAM_GRID_TASK1)
     SEED = 1234
     COOL_DOWN_ROUND = 10
+    NUM_TRIALS = 1
+    POP_BETAS = [1.0]
 
     random_state = np.random.RandomState(SEED)
     # generate parameters
     beta_user = random_state.normal(0, 1, N_FEATURES)
     beta_item = random_state.normal(0, 1, N_FEATURES)
     intercept = np.log(PROB / (1 - PROB))
+    seeds = random_state.randint(0, 2**16, size=(NUM_TRIALS, )).tolist()
 
     params = []
-    for param in PARAM_GRIDS:
-        pop_beta = param['pop_beta']
-        mu = np.log(pop_beta)
-        pop_bias_mu = random_state.lognormal(mean=mu, sigma=POP_BIAS_SCALE, size=(N_POPS,))
-        for i in range(NUM_TRIALS):
-            seed = random_state.randint(0, 2**16)
-            params.append((
-                seed, param, PATH, 
-                beta_user, beta_item, intercept, pop_bias_mu))
-    
+    for pop_beta in POP_BETAS:
+        pop_bias_mu = random_state.exponential(scale=pop_beta, size=(N_POPS, ))
+        for param in PARAM_GRIDS:
+            for seed in seeds:
+                param['pop_beta'] = pop_beta
+                params.append((
+                    seed, param, PATH, 
+                    beta_user, beta_item, intercept, pop_bias_mu))
+
     # run main
     params = params[start_idx:]
     print("Total jobs: ", len(params))
