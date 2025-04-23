@@ -32,7 +32,7 @@ from evaluator.metrics import (
     calculate_ndcg
 )
 # set GPU memory limit
-utils.set_gpu_memory_limitation(memory=6)
+utils.set_gpu_memory_limitation(memory=4)
 
 # number of trials
 N_FEATURES = 5
@@ -91,7 +91,6 @@ def mock_unbias_evaluation(
             'pop_bias_mu':  pop_bias_mu
         }
     )
-    print(dataset.clicks.mean())
 
     metrics = _evaluate(model, dataset)
     return metrics
@@ -143,7 +142,7 @@ def build_model(param, popularity):
 def main(seed: int, param: dict, path: str,
          beta_user, beta_item, intercept, pop_bias_mu):
     # set GPU memory limit
-    utils.set_gpu_memory_limitation(memory=6)
+    utils.set_gpu_memory_limitation(memory=4)
     # set tensorflow global random seed
     random.seed(seed)
     tf.random.set_seed(seed)
@@ -208,7 +207,7 @@ def main(seed: int, param: dict, path: str,
             dataloader=dataloader,
             optimizer=optimizer,
             epochs=10000,
-            max_steps=10000,
+            max_steps=20000,
             verbose=-1,
             estimate_beta_freq=-1,
             epsilon=1e-4,
@@ -239,7 +238,7 @@ def main(seed: int, param: dict, path: str,
 
 
 if __name__ == "__main__":
-    PATH = "./tests/mocks/simulation/results/study4_ext_v3.pkl"
+    PATH = "./tests/mocks/simulation/results/study4_ext_v6.pkl"
     if os.path.exists(PATH):
         df = pd.read_pickle(PATH)
         start_idx = len(df)
@@ -248,19 +247,19 @@ if __name__ == "__main__":
 
     # define the grids
     PARAM_GRID_TASK1 = {
-        # 'n_users': [1000, 2000, 5000],
-        'n_users': [5000],
+        'n_users': [1000, 2000, 5000],
         'L': [1],
-        # 'pop_beta': [0.2, 0.5, 1.0],
-        'model': ['bpr', 'ips-norm', 'ips-clip', 'pda', 'vi-debias', 'mle-debias']
+        # 'model': ['bpr', 'ips-norm', 'ips-clip', 'pda', 'vi-debias', 'mle-debias']
+        'model': ['mle-debias']
     }
 
     create_param_grid = lambda param_grid: list(dict(zip(param_grid.keys(), val)) for val in itertools.product(*param_grid.values()))
     PARAM_GRIDS = create_param_grid(PARAM_GRID_TASK1)
     SEED = 1234
     COOL_DOWN_ROUND = 10
-    NUM_TRIALS = 1
-    POP_BETAS = [1.0]
+    NUM_TRIALS = 10
+    # POP_BETAS = [0.2, 0.5, 1.0]
+    POP_BETAS = [0.5]
 
     random_state = np.random.RandomState(SEED)
     # generate parameters
@@ -274,15 +273,16 @@ if __name__ == "__main__":
         pop_bias_mu = random_state.exponential(scale=pop_beta, size=(N_POPS, ))
         for param in PARAM_GRIDS:
             for seed in seeds:
-                param['pop_beta'] = pop_beta
+                param_ = param.copy()
+                param_['pop_beta'] = pop_beta
                 params.append((
-                    seed, param, PATH, 
+                    seed, param_, PATH, 
                     beta_user, beta_item, intercept, pop_bias_mu))
 
     # run main
     params = params[start_idx:]
     print("Total jobs: ", len(params))
-    NUM_PROCESS = 1
+    NUM_PROCESS = 3
 
     # submit jobs using multiple processes
     mp.set_start_method('spawn')
@@ -290,4 +290,4 @@ if __name__ == "__main__":
         n_jobs=NUM_PROCESS, 
         backend='loky',
         verbose=20
-    )(delayed(main)(*param) for param in tqdm(params))
+    )(delayed(main)(*param) for param in tqdm(params, ncols=50))

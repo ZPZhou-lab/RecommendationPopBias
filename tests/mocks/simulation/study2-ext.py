@@ -41,7 +41,8 @@ N_POPS = 200
 PROB = 0.01
 # define the grids
 PARAM_GRID = {
-    'model': ['bpr', 'ips-norm', 'ips-clip', 'pda', 'mle', 'mle-debias'],
+    # 'model': ['bpr', 'ips-norm', 'ips-clip', 'pda', 'mle', 'mle-debias'],
+    'model': ['mle-debias'],
 }
 
 def mock_unbias_evaluation(
@@ -92,7 +93,6 @@ def mock_unbias_evaluation(
             'pop_bias':  pop_bias
         }
     )
-    print(dataset.clicks.mean())
 
     metrics = _evaluate(model, dataset)
     return metrics
@@ -177,7 +177,7 @@ def main(seed: int, param: dict, path: str,
         dataloader=dataloader,
         optimizer=optimizer,
         epochs=10000,
-        max_steps=10000,
+        max_steps=20000,
         verbose=-1,
         estimate_beta_freq=-1,
         epsilon=1e-4,
@@ -211,7 +211,7 @@ def main(seed: int, param: dict, path: str,
 
 
 if __name__ == "__main__":
-    PATH = "./tests/mocks/simulation/results/study2_ext_v3.pkl"
+    PATH = "./tests/mocks/simulation/results/study2_ext_v5.pkl"
     if os.path.exists(PATH):
         df = pd.read_pickle(PATH)
         start_idx = len(df)
@@ -221,7 +221,8 @@ if __name__ == "__main__":
     PARAM_GRIDS = list(dict(zip(PARAM_GRID.keys(), val)) for val in itertools.product(*PARAM_GRID.values()))
     SEED = 1234
     COOL_DOWN_ROUND = 10
-    POP_BETAS = [0.2, 0.5, 1.0, 1.5, 2.0]
+    # POP_BETAS = [0.2, 0.5, 1.0, 1.5, 2.0]
+    POP_BETAS = [0.5]
     NUM_TRIALS = 10
     # POP_BETAS = [1.0]
 
@@ -238,9 +239,10 @@ if __name__ == "__main__":
         pop_bias = random_state.exponential(scale=pop_beta, size=(N_POPS, ))
         for param in PARAM_GRIDS:
             for seed in seeds:
-                param['pop_beta'] = pop_beta
+                param_ = param.copy()
+                param_['pop_beta'] = pop_beta
                 params.append((
-                    seed, param, PATH,
+                    seed, param_, PATH,
                     beta_user, beta_item, intercept, pop_bias))
 
     # run main
@@ -248,7 +250,7 @@ if __name__ == "__main__":
     print("Total jobs: ", len(params))
 
     # run main
-    NUM_PROCESS = 1
+    NUM_PROCESS = 3
     mp.set_start_method('spawn')
     Parallel(
         n_jobs=NUM_PROCESS, 

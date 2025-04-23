@@ -97,8 +97,10 @@ def calculate_ndcg(
         if hits == 0:
             ndcg.append(0)
         else:
-            dcg = sum([1 / np.log2(i + 2) if top_k_items[i] in items else 0 for i in range(top_k)])
-            idcg = sum([1 / np.log2(i + 2) for i in range(min(len(items), top_k))])
+            dcg = [1 / np.log2(i + 2) if top_k_items[i] in items else 0 for i in range(top_k)]
+            dcg = sum(dcg) if len(dcg) > 0 else 0
+            idcg = [1 / np.log2(i + 2) for i in range(min(len(items), top_k))]
+            idcg = sum(idcg) if len(idcg) > 0 else 1
             ndcg.append(dcg / idcg)
     return np.mean(ndcg)
 
